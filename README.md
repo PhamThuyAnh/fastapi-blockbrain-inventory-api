@@ -251,9 +251,6 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/v1/users/me
 ```
 fastapi-oauth2-inventory-api/
 ├── main.py            # App, auth, dataset generator, endpoints
-├── api/
-│   └── index.py       # Vercel serverless entrypoint (re-exports main.app)
-├── vercel.json        # Routes every path to the function
 ├── requirements.txt   # Dependencies
 ├── .gitignore
 ├── .vercelignore
@@ -264,13 +261,15 @@ fastapi-oauth2-inventory-api/
 
 ## Deploying to Vercel
 
-The repo is deploy-ready: `api/index.py` exposes the same `app` as local development, and
-`vercel.json` rewrites every path to it so `/token`, `/api/v1/...` and `/docs` all work.
+Vercel has first-class FastAPI support, so no `vercel.json` and no `api/` wrapper are needed: the
+**FastAPI** application preset detects `app` in `main.py` at the repository root and serves every
+path to it, preserving the request path so `/token`, `/api/v1/...` and `/docs` all resolve.
 
 ### Option A — Vercel dashboard
 
 1. Go to <https://vercel.com/new> and import `PhamThuyAnh/fastapi-oauth2-inventory-api`.
-2. Leave the framework preset as **Other** — `vercel.json` supplies the configuration.
+2. Application Preset: **FastAPI**. Root Directory: **`./`** — not `api`, or the build misses
+   `requirements.txt` and `main.py`.
 3. Add the environment variables from [Configuration](#configuration) (at minimum `SECRET_KEY`).
 4. Click **Deploy**.
 
