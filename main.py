@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import random
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -29,14 +30,19 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 # Security configuration
 #
-# NOTE: SECRET_KEY is hard-coded here so the demo runs out of the box. In any
-# real deployment load it from the environment (e.g. os.environ["SECRET_KEY"])
-# and never commit it.
+# SECRET_KEY comes from the environment. The fallback below keeps the demo
+# runnable straight after a clone, but it is public knowledge - set a real
+# SECRET_KEY in any deployed environment:
+#     python -c "import secrets; print(secrets.token_hex(32))"
 # ---------------------------------------------------------------------------
 
-SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
+_DEV_SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
+
+SECRET_KEY = os.environ.get("SECRET_KEY", _DEV_SECRET_KEY)
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+
+USING_DEV_SECRET = SECRET_KEY == _DEV_SECRET_KEY
 
 _PWD_SALT = b"specialty-coffee-demo-salt"
 
@@ -51,12 +57,16 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 # Demo user store. Replace with a real database in production.
+# Override the credentials per environment with DEMO_USERNAME / DEMO_PASSWORD.
+DEMO_USERNAME = os.environ.get("DEMO_USERNAME", "asher")
+DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "testpassword123")
+
 FAKE_USERS_DB: dict[str, dict[str, Any]] = {
-    "asher": {
-        "username": "asher",
+    DEMO_USERNAME: {
+        "username": DEMO_USERNAME,
         "full_name": "Asher Pham",
         "email": "asher@example.com",
-        "hashed_password": hash_password("testpassword123"),
+        "hashed_password": hash_password(DEMO_PASSWORD),
         "disabled": False,
     }
 }
@@ -427,13 +437,19 @@ app = FastAPI(
 
 @app.get("/", tags=["meta"], summary="Service metadata")
 async def root() -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "service": app.title,
         "version": app.version,
         "records": len(INVENTORY),
         "docs": "/docs",
         "token_url": "/token",
     }
+    if USING_DEV_SECRET:
+        payload["warning"] = (
+            "Running with the public development SECRET_KEY. "
+            "Set the SECRET_KEY environment variable before relying on these tokens."
+        )
+    return payload
 
 
 @app.get("/health", tags=["meta"], summary="Liveness probe")

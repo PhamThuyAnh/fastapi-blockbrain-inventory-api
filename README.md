@@ -81,9 +81,33 @@ curl -X POST http://127.0.0.1:8000/token \
 In Swagger UI, click **Authorize**, enter the same username and password, and every protected
 endpoint will then send the token for you.
 
-> **Security note:** the demo signs tokens with a hard-coded `SECRET_KEY` and stores the single user
-> in an in-memory dict with a stdlib PBKDF2 hash. For anything real, load the secret from the
-> environment and back the user store with a database.
+> **Security note:** the fallback `SECRET_KEY` committed in `main.py` is public knowledge, and the
+> single user lives in an in-memory dict behind a stdlib PBKDF2 hash. Set a real `SECRET_KEY` in
+> every deployed environment (see [Configuration](#configuration)) and back the user store with a
+> database before this guards anything.
+
+---
+
+## Configuration
+
+All settings are read from environment variables at import time, with defaults that keep a fresh
+clone runnable.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SECRET_KEY` | the public dev key | HS256 signing key. **Always override when deployed.** |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `30` | Token lifetime in minutes |
+| `DEMO_USERNAME` | `asher` | Username of the seeded demo account |
+| `DEMO_PASSWORD` | `testpassword123` | Password of the seeded demo account |
+
+Generate a signing key:
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+While the fallback key is in use, `GET /` includes a `warning` field. Once `SECRET_KEY` is set, that
+field disappears — a quick way to confirm your deployment picked up the variable.
 
 ---
 
@@ -227,10 +251,69 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/v1/users/me
 ```
 fastapi-oauth2-inventory-api/
 ├── main.py            # App, auth, dataset generator, endpoints
+├── api/
+│   └── index.py       # Vercel serverless entrypoint (re-exports main.app)
+├── vercel.json        # Routes every path to the function
 ├── requirements.txt   # Dependencies
-├── .gitignore         # Python ignore list
+├── .gitignore
+├── .vercelignore
 └── README.md
 ```
+
+---
+
+## Deploying to Vercel
+
+The repo is deploy-ready: `api/index.py` exposes the same `app` as local development, and
+`vercel.json` rewrites every path to it so `/token`, `/api/v1/...` and `/docs` all work.
+
+### Option A — Vercel dashboard
+
+1. Go to <https://vercel.com/new> and import `PhamThuyAnh/fastapi-oauth2-inventory-api`.
+2. Leave the framework preset as **Other** — `vercel.json` supplies the configuration.
+3. Add the environment variables from [Configuration](#configuration) (at minimum `SECRET_KEY`).
+4. Click **Deploy**.
+
+### Option B — Vercel CLI
+
+```bash
+npm i -g vercel
+
+vercel login
+vercel link                                    # link this folder to a project
+
+# Set secrets for all three environments
+vercel env add SECRET_KEY production
+vercel env add SECRET_KEY preview
+vercel env add SECRET_KEY development
+
+vercel deploy --prod
+```
+
+### Verifying the deployment
+
+```bash
+BASE=https://<your-deployment>.vercel.app
+
+# No "warning" field means SECRET_KEY was picked up
+curl -s $BASE/
+
+TOKEN=$(curl -s -X POST $BASE/token \
+  -d "username=asher&password=testpassword123" | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/api/v1/inventory?limit=3"
+```
+
+Swagger UI is at `$BASE/docs`.
+
+### Serverless caveats
+
+- **Cold starts.** The 120-lot dataset is rebuilt on each cold start. Because the generator is seeded
+  with `random.Random(42)`, every instance produces byte-identical records — IDs stay stable.
+- **Stateless.** There is no shared writable state, so the read-only inventory suits serverless well.
+  Any future write endpoint needs a real database; in-memory mutations would not survive.
+- **Tokens survive redeploys** only while `SECRET_KEY` stays the same. Rotating it invalidates every
+  issued token.
 
 ---
 
