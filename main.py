@@ -1,9 +1,14 @@
 """
-Specialty Coffee Inventory API
-==============================
+Specialty Coffee & Inventory API
+================================
 
 A FastAPI service exposing a seeded, in-memory catalogue of specialty coffee
-lots behind OAuth2 Password Bearer (JWT) authentication.
+lots behind HTTP Basic Authentication, built to be registered as a custom
+External API on the Blockbrain platform.
+
+The OpenAPI 3.1 document at /openapi.json carries explicit operation IDs,
+endpoint summaries and per-parameter descriptions so Blockbrain agents can
+discover, route and execute tool calls accurately.
 
 Run locally:
     uvicorn main:app --reload
@@ -14,64 +19,55 @@ Interactive docs:
 
 from __future__ import annotations
 
-import hashlib
 import math
 import os
 import random
 import secrets
-from datetime import datetime, timedelta, timezone
+from collections import defaultdict
 from typing import Annotated, Any, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from jose import JWTError, jwt
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
-# Security configuration
+# Authentication
 #
-# SECRET_KEY comes from the environment. The fallback below keeps the demo
-# runnable straight after a clone, but it is public knowledge - set a real
-# SECRET_KEY in any deployed environment:
-#     python -c "import secrets; print(secrets.token_hex(32))"
+# HTTP Basic, which is what the Blockbrain External API registry sends when
+# its "Authentication" field is set to `Basic`. Credentials are overridable
+# per environment; the defaults match the values registered in the README.
 # ---------------------------------------------------------------------------
 
-_DEV_SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
+BASIC_AUTH_USERNAME = os.environ.get("BASIC_AUTH_USERNAME", "asher")
+BASIC_AUTH_PASSWORD = os.environ.get("BASIC_AUTH_PASSWORD", "testpassword123")
 
-SECRET_KEY = os.environ.get("SECRET_KEY", _DEV_SECRET_KEY)
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
-
-USING_DEV_SECRET = SECRET_KEY == _DEV_SECRET_KEY
-
-_PWD_SALT = b"specialty-coffee-demo-salt"
+security = HTTPBasic()
 
 
-def hash_password(password: str) -> str:
-    """PBKDF2-SHA256 hash. Stdlib-only so the demo needs no extra dependency."""
-    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), _PWD_SALT, 100_000).hex()
+def require_basic_auth(
+    credentials: Annotated[HTTPBasicCredentials, Depends(security)],
+) -> str:
+    """Validate HTTP Basic credentials and return the authenticated username.
+
+    Both comparisons use `secrets.compare_digest` so a wrong username and a
+    wrong password take the same time to reject.
+    """
+    correct_username = secrets.compare_digest(
+        credentials.username.encode("utf-8"), BASIC_AUTH_USERNAME.encode("utf-8")
+    )
+    correct_password = secrets.compare_digest(
+        credentials.password.encode("utf-8"), BASIC_AUTH_PASSWORD.encode("utf-8")
+    )
+    if not (correct_username and correct_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return secrets.compare_digest(hash_password(plain_password), hashed_password)
-
-
-# Demo user store. Replace with a real database in production.
-# Override the credentials per environment with DEMO_USERNAME / DEMO_PASSWORD.
-DEMO_USERNAME = os.environ.get("DEMO_USERNAME", "asher")
-DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "testpassword123")
-
-FAKE_USERS_DB: dict[str, dict[str, Any]] = {
-    DEMO_USERNAME: {
-        "username": DEMO_USERNAME,
-        "full_name": "Asher Pham",
-        "email": "asher@example.com",
-        "hashed_password": hash_password(DEMO_PASSWORD),
-        "disabled": False,
-    }
-}
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+AuthenticatedUser = Annotated[str, Depends(require_basic_auth)]
 
 
 # ---------------------------------------------------------------------------
@@ -79,56 +75,76 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 # ---------------------------------------------------------------------------
 
 
-class Token(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    expires_in: int = Field(description="Token lifetime in seconds.")
-
-
-class TokenData(BaseModel):
-    username: Optional[str] = None
-
-
-class User(BaseModel):
-    username: str
-    full_name: Optional[str] = None
-    email: Optional[str] = None
-    disabled: bool = False
-
-
-class UserInDB(User):
-    hashed_password: str
-
-
 class CoffeeLot(BaseModel):
     """A single green-coffee lot held in inventory."""
 
-    id: int = Field(description="Stable inventory identifier.", examples=[1])
-    name: str = Field(description="Lot name: farm or washing station plus variety and harvest.")
-    origin_country: str
-    region: str
-    variety: str
-    process: str
-    altitude_masl: int = Field(description="Growing altitude in metres above sea level.")
-    cupping_score: float = Field(description="SCA cupping score; 80+ is specialty grade.")
-    stock_bags: int = Field(description="Bags on hand (60 kg each).")
-    price_per_kg_usd: float = Field(description="Wholesale price per kilogram in USD.")
+    id: int = Field(description="Stable inventory identifier, 1 through 100.", examples=[7])
+    name: str = Field(
+        description="Lot name: farm or washing station, variety and harvest year.",
+        examples=["Finca Deborah Typica 22/23"],
+    )
+    origin_country: str = Field(description="Producing country.", examples=["Panama"])
+    region: str = Field(description="Growing region within the origin country.", examples=["Boquete"])
+    variety: str = Field(description="Coffee cultivar.", examples=["Gesha"])
+    process: str = Field(
+        description="Post-harvest processing method.",
+        examples=["Washed", "Natural", "Anaerobic Natural"],
+    )
+    altitude_masl: int = Field(description="Growing altitude in metres above sea level.", examples=[1950])
+    cupping_score: float = Field(
+        description="SCA cupping score. 80 and above is specialty grade; 90+ is exceptional.",
+        examples=[87.75],
+    )
+    stock_bags: int = Field(description="Bags currently on hand; one bag is 60 kg.", examples=[97])
+    price_per_kg_usd: float = Field(description="Wholesale price per kilogram in USD.", examples=[24.23])
 
 
 class PaginatedInventory(BaseModel):
-    page: int
-    limit: int
-    total_records: int
-    total_pages: int
-    data: list[CoffeeLot]
+    """One page of inventory records plus the counts needed to page through."""
+
+    total_records: int = Field(description="Records matching the filters, across all pages.")
+    page: int = Field(description="The page number returned.")
+    page_size: int = Field(description="Maximum records per page, echoing the `limit` parameter.")
+    total_pages: int = Field(description="Number of pages available for the current filters.")
+    data: list[CoffeeLot] = Field(description="The records on this page.")
+
+
+class CountryBreakdown(BaseModel):
+    """Aggregated inventory figures for one origin country."""
+
+    origin_country: str = Field(description="Producing country.")
+    lot_count: int = Field(description="Number of distinct lots from this country.")
+    total_stock_bags: int = Field(description="Bags on hand across the country's lots.")
+    average_cupping_score: float = Field(description="Mean SCA score, rounded to two decimals.")
+    average_price_per_kg_usd: float = Field(description="Mean price per kilogram in USD.")
+
+
+class InventoryStatistics(BaseModel):
+    """Portfolio-wide aggregates over the whole inventory."""
+
+    total_lots: int = Field(description="Total number of coffee lots held.")
+    total_stock_bags: int = Field(description="Total bags on hand across every lot.")
+    total_stock_kg: float = Field(description="Total green weight in kilograms, at 60 kg per bag.")
+    average_cupping_score: float = Field(description="Mean SCA score across all lots.")
+    highest_cupping_score: float = Field(description="Best SCA score in the inventory.")
+    lowest_cupping_score: float = Field(description="Lowest SCA score in the inventory.")
+    average_price_per_kg_usd: float = Field(description="Mean price per kilogram in USD.")
+    total_inventory_value_usd: float = Field(
+        description="Sum of stock_bags * 60 kg * price_per_kg_usd across all lots."
+    )
+    country_count: int = Field(description="Number of distinct origin countries represented.")
+    country_breakdown: list[CountryBreakdown] = Field(
+        description="Per-country aggregates, ordered by lot count descending."
+    )
 
 
 # ---------------------------------------------------------------------------
 # Seeded in-memory dataset
 # ---------------------------------------------------------------------------
 
-TOTAL_RECORDS = 120
+TOTAL_RECORDS = 100
 RANDOM_SEED = 42
+KG_PER_BAG = 60
 
 # origin_country -> regions / varieties / farms / altitude band / score band / processes
 ORIGINS: dict[str, dict[str, Any]] = {
@@ -305,8 +321,8 @@ PREMIUM_PROCESSES = {"Carbonic Maceration", "Anaerobic Natural", "Yeast-Inoculat
 def generate_inventory(total: int = TOTAL_RECORDS, seed: int = RANDOM_SEED) -> list[CoffeeLot]:
     """Build a deterministic dataset of specialty coffee lots.
 
-    The same `seed` always yields the same records, so clients and tests can
-    rely on stable IDs and values across restarts.
+    The same `seed` always yields the same records, so a Blockbrain agent gets
+    identical answers across restarts and across serverless cold starts.
     """
     rng = random.Random(seed)
     countries = list(ORIGINS)
@@ -362,59 +378,46 @@ INVENTORY: list[CoffeeLot] = generate_inventory()
 INVENTORY_BY_ID: dict[int, CoffeeLot] = {lot.id: lot for lot in INVENTORY}
 
 
-# ---------------------------------------------------------------------------
-# Authentication helpers
-# ---------------------------------------------------------------------------
+def compute_statistics(lots: list[CoffeeLot]) -> InventoryStatistics:
+    """Aggregate a list of lots into portfolio-wide and per-country figures."""
+    scores = [lot.cupping_score for lot in lots]
+    prices = [lot.price_per_kg_usd for lot in lots]
+    total_bags = sum(lot.stock_bags for lot in lots)
+    total_value = sum(lot.stock_bags * KG_PER_BAG * lot.price_per_kg_usd for lot in lots)
 
+    grouped: dict[str, list[CoffeeLot]] = defaultdict(list)
+    for lot in lots:
+        grouped[lot.origin_country].append(lot)
 
-def get_user(username: str) -> Optional[UserInDB]:
-    record = FAKE_USERS_DB.get(username)
-    return UserInDB(**record) if record else None
+    breakdown = [
+        CountryBreakdown(
+            origin_country=country,
+            lot_count=len(country_lots),
+            total_stock_bags=sum(lot.stock_bags for lot in country_lots),
+            average_cupping_score=round(
+                sum(lot.cupping_score for lot in country_lots) / len(country_lots), 2
+            ),
+            average_price_per_kg_usd=round(
+                sum(lot.price_per_kg_usd for lot in country_lots) / len(country_lots), 2
+            ),
+        )
+        for country, country_lots in grouped.items()
+    ]
+    # Biggest holdings first, then alphabetically so the order is stable.
+    breakdown.sort(key=lambda entry: (-entry.lot_count, entry.origin_country))
 
-
-def authenticate_user(username: str, password: str) -> Optional[UserInDB]:
-    user = get_user(username)
-    if not user or not verify_password(password, user.hashed_password):
-        return None
-    return user
-
-
-def create_access_token(data: dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
-    to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (
-        expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    return InventoryStatistics(
+        total_lots=len(lots),
+        total_stock_bags=total_bags,
+        total_stock_kg=round(total_bags * KG_PER_BAG, 2),
+        average_cupping_score=round(sum(scores) / len(scores), 2),
+        highest_cupping_score=max(scores),
+        lowest_cupping_score=min(scores),
+        average_price_per_kg_usd=round(sum(prices) / len(prices), 2),
+        total_inventory_value_usd=round(total_value, 2),
+        country_count=len(grouped),
+        country_breakdown=breakdown,
     )
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-
-async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]) -> User:
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username = payload.get("sub")
-        if not username:
-            raise credentials_exception
-        token_data = TokenData(username=username)
-    except JWTError:
-        raise credentials_exception
-
-    user = get_user(token_data.username or "")
-    if user is None:
-        raise credentials_exception
-    return User(**user.model_dump(exclude={"hashed_password"}))
-
-
-async def get_current_active_user(
-    current_user: Annotated[User, Depends(get_current_user)],
-) -> User:
-    if current_user.disabled:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
-    return current_user
 
 
 # ---------------------------------------------------------------------------
@@ -422,92 +425,115 @@ async def get_current_active_user(
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="Specialty Coffee Inventory API",
+    title="Specialty Coffee & Inventory API",
     description=(
-        "OAuth2 Password Bearer (JWT) protected access to a seeded catalogue of "
-        f"{TOTAL_RECORDS} specialty coffee lots.\n\n"
-        "**Demo credentials:** `asher` / `testpassword123`\n\n"
-        "Use the **Authorize** button above, or POST form-encoded credentials "
-        "to `/token`."
+        "Custom testing API with 100+ seeded specialty coffee inventory records "
+        "and HTTP Basic Authentication.\n\n"
+        "Registered as a custom External API on the Blockbrain platform. Every "
+        "`/api/v1/*` endpoint requires HTTP Basic credentials; send them with the "
+        "`Authorization: Basic <base64(username:password)>` header, which the "
+        "Blockbrain registry does automatically when its Authentication field is "
+        "set to `Basic`.\n\n"
+        "The dataset is generated deterministically from a fixed seed, so the "
+        "same query always returns the same records."
     ),
     version="1.0.0",
     contact={"name": "PhamThuyAnh", "url": "https://github.com/PhamThuyAnh"},
+    openapi_tags=[
+        {
+            "name": "inventory",
+            "description": "Browse and inspect individual specialty coffee lots.",
+        },
+        {
+            "name": "statistics",
+            "description": "Aggregated figures across the whole inventory.",
+        },
+    ],
 )
 
+# When PUBLIC_BASE_URL is set, advertise it in the OpenAPI `servers` block so a
+# consumer that fetches /openapi.json knows the absolute base URL to call.
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+if PUBLIC_BASE_URL:
+    app.servers = [{"url": PUBLIC_BASE_URL, "description": "Public base URL"}]
 
-@app.get("/", tags=["meta"], summary="Service metadata")
+
+# Kept out of the OpenAPI schema on purpose: the document that Blockbrain reads
+# should contain only the three callable tools, so agent routing stays sharp.
+@app.get("/", include_in_schema=False)
 async def root() -> dict[str, Any]:
-    payload: dict[str, Any] = {
+    return {
         "service": app.title,
         "version": app.version,
         "records": len(INVENTORY),
+        "authentication": "HTTP Basic",
+        "openapi": "/openapi.json",
         "docs": "/docs",
-        "token_url": "/token",
     }
-    if USING_DEV_SECRET:
-        payload["warning"] = (
-            "Running with the public development SECRET_KEY. "
-            "Set the SECRET_KEY environment variable before relying on these tokens."
-        )
-    return payload
 
 
-@app.get("/health", tags=["meta"], summary="Liveness probe")
+@app.get("/health", include_in_schema=False)
 async def health() -> dict[str, str]:
     return {"status": "ok"}
-
-
-@app.post("/token", response_model=Token, tags=["auth"], summary="Exchange credentials for a JWT")
-async def login_for_access_token(
-    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
-) -> Token:
-    """OAuth2 password flow. Send `username` and `password` as **form data**."""
-    user = authenticate_user(form_data.username, form_data.password)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    access_token = create_access_token(data={"sub": user.username})
-    return Token(
-        access_token=access_token,
-        token_type="bearer",
-        expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-    )
-
-
-@app.get("/api/v1/users/me", response_model=User, tags=["auth"], summary="Current token owner")
-async def read_users_me(
-    current_user: Annotated[User, Depends(get_current_active_user)],
-) -> User:
-    return current_user
 
 
 @app.get(
     "/api/v1/inventory",
     response_model=PaginatedInventory,
+    operation_id="listInventory",
     tags=["inventory"],
-    summary="List coffee lots (paginated, filterable)",
+    summary="List specialty coffee lots with pagination, filtering and search",
+    description=(
+        "Returns a page of specialty coffee inventory records. Combine `country`, "
+        "`min_score` and `search` to narrow the results; the filters are applied "
+        "together (logical AND). Use `page` and `limit` to walk through the "
+        "matches, and read `total_pages` from the response to know when to stop."
+    ),
+    responses={401: {"description": "Missing or invalid HTTP Basic credentials."}},
 )
 async def list_inventory(
-    current_user: Annotated[User, Depends(get_current_active_user)],
-    page: Annotated[int, Query(ge=1, description="1-based page number.")] = 1,
-    limit: Annotated[int, Query(ge=1, le=100, description="Records per page (max 100).")] = 10,
+    username: AuthenticatedUser,
+    page: Annotated[
+        int,
+        Query(ge=1, description="Page number to return, starting at 1."),
+    ] = 1,
+    limit: Annotated[
+        int,
+        Query(ge=1, le=100, description="Maximum records per page, between 1 and 100."),
+    ] = 10,
     country: Annotated[
         Optional[str],
-        Query(description="Exact origin country, case-insensitive, e.g. `Ethiopia`."),
+        Query(
+            description=(
+                "Filter by producing country, matched exactly but case-insensitively. "
+                "Examples: Ethiopia, Kenya, Colombia, Panama, Brazil, Guatemala."
+            ),
+            examples=["Ethiopia"],
+        ),
     ] = None,
     min_score: Annotated[
         Optional[float],
-        Query(ge=0, le=100, description="Only lots with `cupping_score` >= this value."),
+        Query(
+            ge=0,
+            le=100,
+            description=(
+                "Return only lots whose SCA cupping score is greater than or equal "
+                "to this value. Specialty grade starts at 80; use 88 or above for "
+                "the top of the portfolio."
+            ),
+            examples=[88.0],
+        ),
     ] = None,
     search: Annotated[
         Optional[str],
         Query(
             min_length=1,
-            description="Case-insensitive substring match across name, region, "
-            "variety, process and origin country.",
+            description=(
+                "Free-text search. Case-insensitive substring match against lot "
+                "name, region, variety, process and origin country. Examples: "
+                "gesha, anaerobic, yirgacheffe."
+            ),
+            examples=["gesha"],
         ),
     ] = None,
 ) -> PaginatedInventory:
@@ -537,30 +563,64 @@ async def list_inventory(
     start = (page - 1) * limit
 
     return PaginatedInventory(
-        page=page,
-        limit=limit,
         total_records=total_records,
+        page=page,
+        page_size=limit,
         total_pages=total_pages,
         data=results[start : start + limit],
     )
 
 
 @app.get(
+    "/api/v1/statistics",
+    response_model=InventoryStatistics,
+    operation_id="getInventoryStatistics",
+    tags=["statistics"],
+    summary="Aggregated statistics across the whole coffee inventory",
+    description=(
+        "Returns portfolio-wide totals - lot count, bags and green weight on hand, "
+        "average, highest and lowest cupping scores, average price per kilogram "
+        "and total inventory value - together with the same figures broken down "
+        "per origin country, ordered by lot count descending. Takes no parameters "
+        "and always covers the entire inventory."
+    ),
+    responses={401: {"description": "Missing or invalid HTTP Basic credentials."}},
+)
+async def get_inventory_statistics(username: AuthenticatedUser) -> InventoryStatistics:
+    return compute_statistics(INVENTORY)
+
+
+@app.get(
     "/api/v1/inventory/{item_id}",
     response_model=CoffeeLot,
+    operation_id="getInventoryItem",
     tags=["inventory"],
-    summary="Fetch a single coffee lot by ID",
-    responses={404: {"description": "No lot with that ID."}},
+    summary="Retrieve a single coffee lot by its numeric ID",
+    description=(
+        "Fetches one specialty coffee lot by its integer identifier. Valid IDs run "
+        "from 1 to 100. Use `listInventory` first if you need to discover an ID."
+    ),
+    responses={
+        401: {"description": "Missing or invalid HTTP Basic credentials."},
+        404: {"description": "No coffee lot exists with the requested ID."},
+    },
 )
 async def get_inventory_item(
-    item_id: int,
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    username: AuthenticatedUser,
+    item_id: Annotated[
+        int,
+        Path(
+            ge=1,
+            description="Identifier of the coffee lot to retrieve, between 1 and 100.",
+            examples=[7],
+        ),
+    ],
 ) -> CoffeeLot:
     lot = INVENTORY_BY_ID.get(item_id)
     if lot is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Inventory item {item_id} not found",
+            detail=f"Inventory item {item_id} not found. Valid IDs are 1 to {len(INVENTORY)}.",
         )
     return lot
 

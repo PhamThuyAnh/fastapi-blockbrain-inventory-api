@@ -1,145 +1,168 @@
-# Specialty Coffee Inventory API
+# Specialty Coffee & Inventory API
 
-A FastAPI service that exposes a seeded, in-memory catalogue of **120 specialty coffee lots** behind
-OAuth2 Password Bearer authentication with JWT tokens.
+A FastAPI service that exposes a seeded, in-memory catalogue of **100 specialty coffee lots** behind
+**HTTP Basic Authentication**, built to be registered as a custom **External API** on the
+**Blockbrain** platform.
 
-Built with Python 3.10+, FastAPI, Uvicorn and Pydantic v2.
+Python 3.10+ · FastAPI · Uvicorn · Pydantic v2
+
+Live: <https://fastapi-oauth2-inventory-api.vercel.app>
 
 ---
 
-## Features
+## Blockbrain Registry Configuration
 
-- **OAuth2 Password flow with JWT** — `POST /token` exchanges form-encoded credentials for a signed HS256 bearer token.
-- **Protected, paginated inventory** — `GET /api/v1/inventory` with `page` / `limit` / `total_records` / `total_pages` / `data`.
-- **Filtering** — by origin `country`, `min_score` (SCA cupping score), and free-text `search`.
-- **Single-record lookup** — `GET /api/v1/inventory/{item_id}`.
-- **Deterministic dataset** — generated with `random.Random(42)`, so IDs and values are stable across restarts.
-- **Interactive Swagger UI** at `/docs` and ReDoc at `/redoc`, with a working **Authorize** button.
+Paste these values into the Blockbrain **External API** registry.
+
+| Field | Value |
+| :--- | :--- |
+| **Name** | `Specialty Coffee & Inventory API` |
+| **Description** | `Custom testing API with 100+ seeded specialty coffee inventory records and HTTP Basic Authentication.` |
+| **API Specification** | `https://<your-host>/openapi.json` (or upload `openapi.json`) |
+| **API Base URL** | `https://<your-host>` |
+| **Type** | `Open API` |
+| **Logo URL** | `https://cdn-icons-png.flaticon.com/512/924/924514.png` |
+| **Authentication** | `Basic` (Username: `asher`, Password: `testpassword123`) |
+| **Custom Headers** | `Accept: application/json` |
+
+Filled in for the current deployment:
+
+| Field | Value |
+| :--- | :--- |
+| **API Specification** | `https://fastapi-oauth2-inventory-api.vercel.app/openapi.json` |
+| **API Base URL** | `https://fastapi-oauth2-inventory-api.vercel.app` |
+
+### Why this API is agent-friendly
+
+- **One security scheme.** The OpenAPI document declares exactly one — `HTTPBasic` — so there is no
+  ambiguity about how an agent should authenticate.
+- **Explicit operation IDs.** `listInventory`, `getInventoryItem`, `getInventoryStatistics` become
+  clean, readable tool names.
+- **Described parameters.** Every query parameter carries a description with example values, and
+  bounds (`ge` / `le`) are in the schema, so an agent can construct valid calls on the first try.
+- **A tight schema.** `/` and `/health` exist for humans and uptime checks but are excluded from
+  `/openapi.json`, so the document contains only the three callable tools.
+- **Deterministic answers.** The dataset is seeded, so the same question always yields the same
+  numbers.
 
 ---
 
 ## Setup
 
 ```bash
-# 1. Clone
 git clone https://github.com/PhamThuyAnh/fastapi-oauth2-inventory-api.git
 cd fastapi-oauth2-inventory-api
 
-# 2. Create a virtual environment
 python -m venv venv
 
-# 3. Activate it
 source venv/Scripts/activate      # Git Bash on Windows
 # .\venv\Scripts\Activate.ps1     # PowerShell
 # source venv/bin/activate        # macOS / Linux
 
-# 4. Install dependencies
 pip install -r requirements.txt
 
-# 5. Run
 uvicorn main:app --reload
 ```
 
-The API is then at <http://127.0.0.1:8000> and the Swagger UI at <http://127.0.0.1:8000/docs>.
+- API: <http://127.0.0.1:8000>
+- Swagger UI: <http://127.0.0.1:8000/docs>
+- OpenAPI schema: <http://127.0.0.1:8000/openapi.json>
 
-`python main.py` also works — it starts Uvicorn on `127.0.0.1:8000` with reload enabled.
+`python main.py` works too — it starts Uvicorn on `127.0.0.1:8000` with reload enabled.
 
 ---
 
 ## Authentication
 
+HTTP Basic on every `/api/v1/*` endpoint. Blockbrain sends the header automatically when its
+**Authentication** field is set to `Basic`.
+
 | Item | Value |
-| --- | --- |
-| Flow | OAuth2 Password Bearer |
-| Token endpoint | `POST /token` (form-encoded, **not** JSON) |
-| Algorithm | HS256 |
-| Lifetime | 30 minutes |
-| Header | `Authorization: Bearer <access_token>` |
-
-**Demo credentials**
-
-| Username | Password |
-| --- | --- |
-| `asher` | `testpassword123` |
-
-Get a token:
+| :--- | :--- |
+| Scheme | HTTP Basic (`fastapi.security.HTTPBasic`) |
+| Username | `asher` |
+| Password | `testpassword123` |
+| Header | `Authorization: Basic YXNoZXI6dGVzdHBhc3N3b3JkMTIz` |
 
 ```bash
-curl -X POST http://127.0.0.1:8000/token \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=asher&password=testpassword123"
+curl -u asher:testpassword123 http://127.0.0.1:8000/api/v1/inventory
 ```
 
-```json
-{
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "token_type": "bearer",
-  "expires_in": 1800
-}
-```
+A missing or wrong credential returns `401` with `WWW-Authenticate: Basic`. Both the username and
+the password are compared with `secrets.compare_digest`, so a wrong username and a wrong password
+take the same time to reject.
 
-In Swagger UI, click **Authorize**, enter the same username and password, and every protected
-endpoint will then send the token for you.
+> **Security note:** these credentials are public — they are in this README, in a public repository.
+> The dataset is synthetic, so nothing sensitive is exposed, but override the credentials with the
+> environment variables below before putting anything real behind them.
 
-> **Security note:** the fallback `SECRET_KEY` committed in `main.py` is public knowledge, and the
-> single user lives in an in-memory dict behind a stdlib PBKDF2 hash. Set a real `SECRET_KEY` in
-> every deployed environment (see [Configuration](#configuration)) and back the user store with a
-> database before this guards anything.
-
----
-
-## Configuration
-
-All settings are read from environment variables at import time, with defaults that keep a fresh
-clone runnable.
+### Configuration
 
 | Variable | Default | Description |
-| --- | --- | --- |
-| `SECRET_KEY` | the public dev key | HS256 signing key. **Always override when deployed.** |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | `30` | Token lifetime in minutes |
-| `DEMO_USERNAME` | `asher` | Username of the seeded demo account |
-| `DEMO_PASSWORD` | `testpassword123` | Password of the seeded demo account |
-
-Generate a signing key:
-
-```bash
-python -c "import secrets; print(secrets.token_hex(32))"
-```
-
-While the fallback key is in use, `GET /` includes a `warning` field. Once `SECRET_KEY` is set, that
-field disappears — a quick way to confirm your deployment picked up the variable.
+| :--- | :--- | :--- |
+| `BASIC_AUTH_USERNAME` | `asher` | Basic auth username |
+| `BASIC_AUTH_PASSWORD` | `testpassword123` | Basic auth password |
+| `PUBLIC_BASE_URL` | *(unset)* | When set, added to the OpenAPI `servers` block as the absolute base URL |
 
 ---
 
 ## Endpoints
 
-| Method | Path | Auth | Description |
-| --- | --- | --- | --- |
-| `GET` | `/` | — | Service metadata and record count |
-| `GET` | `/health` | — | Liveness probe |
-| `POST` | `/token` | — | Exchange credentials for a JWT |
-| `GET` | `/api/v1/users/me` | Bearer | The current token's owner |
-| `GET` | `/api/v1/inventory` | Bearer | Paginated, filterable lot list |
-| `GET` | `/api/v1/inventory/{item_id}` | Bearer | A single lot by ID |
-| `GET` | `/docs` | — | Swagger UI |
-| `GET` | `/redoc` | — | ReDoc |
-| `GET` | `/openapi.json` | — | OpenAPI 3.1 schema |
+| Method | Path | Operation ID | Auth | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `GET` | `/api/v1/inventory` | `listInventory` | Basic | Paginated, filterable lot list |
+| `GET` | `/api/v1/inventory/{item_id}` | `getInventoryItem` | Basic | A single lot by integer ID |
+| `GET` | `/api/v1/statistics` | `getInventoryStatistics` | Basic | Portfolio-wide aggregates |
+| `GET` | `/openapi.json` | — | — | OpenAPI 3.1 schema |
+| `GET` | `/docs` | — | — | Swagger UI |
+| `GET` | `/redoc` | — | — | ReDoc |
+| `GET` | `/health` | — | — | Liveness probe (not in schema) |
+
+`/openapi.json` and `/docs` are deliberately public so the Blockbrain registry can fetch the
+specification without credentials.
 
 ### Query parameters for `GET /api/v1/inventory`
 
 | Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `page` | int ≥ 1 | `1` | 1-based page number |
-| `limit` | int 1–100 | `10` | Records per page |
-| `country` | string | — | Exact origin country match, case-insensitive (e.g. `Ethiopia`) |
-| `min_score` | float 0–100 | — | Only lots whose `cupping_score` is ≥ this value |
-| `search` | string | — | Case-insensitive substring match across `name`, `region`, `variety`, `process` and `origin_country` |
+| :--- | :--- | :--- | :--- |
+| `page` | int ≥ 1 | `1` | Page number, starting at 1 |
+| `limit` | int 1–100 | `10` | Maximum records per page |
+| `country` | string | — | Exact origin country, case-insensitive (e.g. `Ethiopia`) |
+| `min_score` | float 0–100 | — | Only lots with `cupping_score` ≥ this value |
+| `search` | string | — | Case-insensitive substring match across `name`, `region`, `variety`, `process`, `origin_country` |
 
-Filters combine with AND. A `limit` above 100 or a `page` below 1 returns `422`.
+Filters combine with AND. Out-of-range values return `422`.
 
 ---
 
-## Record schema
+## Response shapes
+
+### `GET /api/v1/inventory`
+
+```json
+{
+  "total_records": 100,
+  "page": 1,
+  "page_size": 2,
+  "total_pages": 50,
+  "data": [
+    {
+      "id": 1,
+      "name": "Adado Cooperative Heirloom 24/25",
+      "origin_country": "Ethiopia",
+      "region": "Jimma",
+      "variety": "Heirloom",
+      "process": "Washed",
+      "altitude_masl": 1920,
+      "cupping_score": 86.75,
+      "stock_bags": 30,
+      "price_per_kg_usd": 19.2
+    }
+  ]
+}
+```
+
+### `GET /api/v1/inventory/{item_id}`
 
 ```json
 {
@@ -156,102 +179,136 @@ Filters combine with AND. A `limit` above 100 or a `page` below 1 returns `422`.
 }
 ```
 
-| Field | Notes |
-| --- | --- |
-| `id` | Stable integer, `1`–`120` |
-| `name` | Farm or washing station, variety, and harvest year |
-| `origin_country` | One of 18 producing countries |
-| `region` | A real growing region within that country |
-| `variety` | Cultivar, e.g. `SL28`, `Gesha`, `Pacamara`, `Heirloom` |
-| `process` | `Washed`, `Natural`, `Honey`, `Anaerobic Natural`, `Carbonic Maceration`, `Wet-Hulled`, … |
-| `altitude_masl` | Metres above sea level, in 10 m steps |
-| `cupping_score` | SCA score to the nearest quarter point; 80+ is specialty grade |
-| `stock_bags` | 60 kg bags on hand — scarcer at the top of the quality curve |
-| `price_per_kg_usd` | Tracks cup score, with a premium for rare varieties and experimental processing |
+### `GET /api/v1/statistics`
+
+```json
+{
+  "total_lots": 100,
+  "total_stock_bags": 10544,
+  "total_stock_kg": 632640.0,
+  "average_cupping_score": 86.68,
+  "highest_cupping_score": 92.0,
+  "lowest_cupping_score": 81.0,
+  "average_price_per_kg_usd": 29.84,
+  "total_inventory_value_usd": 13400256.6,
+  "country_count": 18,
+  "country_breakdown": [
+    {
+      "origin_country": "Brazil",
+      "lot_count": 6,
+      "total_stock_bags": 559,
+      "average_cupping_score": 84.62,
+      "average_price_per_kg_usd": 13.82
+    }
+  ]
+}
+```
+
+`country_breakdown` is ordered by `lot_count` descending, then alphabetically.
+
+---
+
+## Dataset
+
+100 records generated by `generate_inventory()` from `random.Random(42)`, round-robin across 18
+producing countries so every origin is represented. Rebuilding on any machine — or on a serverless
+cold start — yields byte-identical records.
+
+| Field | Type | Notes |
+| :--- | :--- | :--- |
+| `id` | int | Stable, `1`–`100` |
+| `name` | str | Farm or washing station, variety, harvest year |
+| `origin_country` | str | One of 18 producing countries |
+| `region` | str | A real growing region within that country |
+| `variety` | str | Cultivar, e.g. `SL28`, `Gesha`, `Pacamara`, `Heirloom` |
+| `process` | str | `Washed`, `Natural`, `Honey`, `Anaerobic Natural`, `Carbonic Maceration`, `Wet-Hulled`, … |
+| `altitude_masl` | int | Metres above sea level, in 10 m steps |
+| `cupping_score` | float | SCA score to the nearest quarter point; 80+ is specialty grade |
+| `stock_bags` | int | 60 kg bags on hand — scarcer at the top of the quality curve |
+| `price_per_kg_usd` | float | Tracks cup score, with a premium for rare varieties and experimental processing |
+
+To resize or reshuffle, change `TOTAL_RECORDS` or `RANDOM_SEED` at the top of the dataset section in
+[main.py](main.py), or add a country to the `ORIGINS` dict.
 
 ---
 
 ## Example requests
 
-Store a token in a shell variable first:
-
 ```bash
-TOKEN=$(curl -s -X POST http://127.0.0.1:8000/token \
-  -d "username=asher&password=testpassword123" | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+BASE=http://127.0.0.1:8000          # or your public host
+AUTH=asher:testpassword123
 ```
 
-**Second page, three per page**
+**First page, five per page**
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:8000/api/v1/inventory?page=2&limit=3"
+curl -u $AUTH "$BASE/api/v1/inventory?page=1&limit=5"
 ```
 
 **Ethiopian lots scoring 88 or better**
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:8000/api/v1/inventory?country=Ethiopia&min_score=88"
+curl -u $AUTH "$BASE/api/v1/inventory?country=Ethiopia&min_score=88"
 ```
 
 **Every Gesha in the book**
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:8000/api/v1/inventory?search=gesha&limit=50"
+curl -u $AUTH "$BASE/api/v1/inventory?search=gesha&limit=100"
 ```
 
 **Anaerobic lots from Colombia**
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:8000/api/v1/inventory?country=Colombia&search=anaerobic"
+curl -u $AUTH "$BASE/api/v1/inventory?country=Colombia&search=anaerobic"
 ```
 
 **A single lot**
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:8000/api/v1/inventory/7"
+curl -u $AUTH "$BASE/api/v1/inventory/7"
 ```
 
-**Who am I?**
+**Portfolio statistics**
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/v1/users/me
+curl -u $AUTH "$BASE/api/v1/statistics"
 ```
 
-### Response shape for the list endpoint
+**The specification Blockbrain reads** (no credentials needed)
 
-```json
-{
-  "page": 2,
-  "limit": 3,
-  "total_records": 120,
-  "total_pages": 40,
-  "data": [ { "id": 4, "name": "Fazenda Rainha Catuai 23/24", "...": "..." } ]
-}
+```bash
+curl "$BASE/openapi.json"
 ```
+
+### Questions a Blockbrain agent can answer with these tools
+
+- "Which Ethiopian lots cup above 88?" → `listInventory(country=Ethiopia, min_score=88)`
+- "Show me every Gesha we hold." → `listInventory(search=gesha, limit=100)`
+- "What is lot 42?" → `getInventoryItem(item_id=42)`
+- "How many bags do we have, and what is the inventory worth?" → `getInventoryStatistics()`
+- "Which country has our highest average cupping score?" → `getInventoryStatistics()`, then read
+  `country_breakdown`
 
 ---
 
 ## Status codes
 
 | Code | When |
-| --- | --- |
+| :--- | :--- |
 | `200` | Success |
-| `401` | Missing, malformed, or expired token; or wrong credentials at `/token` |
-| `404` | No inventory item with that ID |
-| `422` | Query parameter fails validation (e.g. `limit=500`) |
+| `401` | Missing or invalid HTTP Basic credentials |
+| `404` | No coffee lot with the requested ID |
+| `422` | A parameter failed validation (e.g. `limit=500`, `item_id=0`) |
 
 ---
 
 ## Project layout
 
-```
+```text
 fastapi-oauth2-inventory-api/
-├── main.py            # App, auth, dataset generator, endpoints
-├── requirements.txt   # Dependencies
+├── main.py            # App, Basic auth, dataset generator, endpoints
+├── requirements.txt   # fastapi, uvicorn[standard], pydantic
 ├── .gitignore
 ├── .vercelignore
 └── README.md
@@ -259,71 +316,74 @@ fastapi-oauth2-inventory-api/
 
 ---
 
-## Deploying to Vercel
+## Deployment
 
-Vercel has first-class FastAPI support, so no `vercel.json` and no `api/` wrapper are needed: the
-**FastAPI** application preset detects `app` in `main.py` at the repository root and serves every
-path to it, preserving the request path so `/token`, `/api/v1/...` and `/docs` all resolve.
+Blockbrain needs a publicly reachable HTTPS base URL. Any of the following works.
 
-### Option A — Vercel dashboard
+### Option A — Vercel (current deployment)
 
-1. Go to <https://vercel.com/new> and import `PhamThuyAnh/fastapi-oauth2-inventory-api`.
-2. Application Preset: **FastAPI**. Root Directory: **`./`** — not `api`, or the build misses
-   `requirements.txt` and `main.py`.
-3. Add the environment variables from [Configuration](#configuration) (at minimum `SECRET_KEY`).
-4. Click **Deploy**.
+Import the repo at <https://vercel.com/new>, then:
 
-### Option B — Vercel CLI
+- **Application Preset:** `FastAPI`
+- **Root Directory:** `./` — **not** `api`, or the build misses `requirements.txt` and `main.py`
+- **Environment Variables:** `BASIC_AUTH_USERNAME`, `BASIC_AUTH_PASSWORD` (optional but recommended)
+
+Vercel's FastAPI preset detects `app` in `main.py` at the project root and serves every path to it
+with the request path preserved. No `vercel.json` and no `api/` wrapper are needed.
+
+> Do **not** add a `vercel.json` that rewrites `/(.*)` to `/api/index`: the function receives the
+> destination path, so the ASGI app sees `/api/index`, matches no route, and every request returns
+> FastAPI's own 404.
+
+### Option B — Render (free tier)
+
+1. Push this repo to GitHub.
+2. At <https://dashboard.render.com> create a **New → Web Service** and connect the repository.
+3. Configure:
+   - **Runtime:** `Python 3`
+   - **Build Command:** `pip install -r requirements.txt`
+   - **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
+   - **Instance Type:** `Free`
+4. Add the environment variables from [Configuration](#configuration).
+5. Deploy. The public URL becomes your **API Base URL**.
+
+A free Render instance spins down when idle, so the first request after a quiet spell takes a few
+seconds. Point Render's health check at `/health` to keep the check itself cheap.
+
+### Option C — ngrok (local tunnel, for quick testing)
+
+Useful when you want Blockbrain to reach the API running on your own machine.
 
 ```bash
-npm i -g vercel
+# Terminal 1
+uvicorn main:app --host 0.0.0.0 --port 8000
 
-vercel login
-vercel link                                    # link this folder to a project
-
-# Set secrets for all three environments
-vercel env add SECRET_KEY production
-vercel env add SECRET_KEY preview
-vercel env add SECRET_KEY development
-
-vercel deploy --prod
+# Terminal 2
+ngrok http 8000
 ```
 
-### Verifying the deployment
+Use the `https://….ngrok-free.app` URL ngrok prints as the **API Base URL**, and
+`https://….ngrok-free.app/openapi.json` as the **API Specification**.
 
-```bash
-BASE=https://<your-deployment>.vercel.app
+Two caveats: a free ngrok URL changes every restart, so you must update the Blockbrain registry each
+time; and ngrok's free tier serves a browser warning page on first visit — send
+`ngrok-skip-browser-warning: true` as a custom header if the registry trips over it.
 
-# No "warning" field means SECRET_KEY was picked up
-curl -s $BASE/
+### Serverless / free-tier notes
 
-TOKEN=$(curl -s -X POST $BASE/token \
-  -d "username=asher&password=testpassword123" | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
-
-curl -s -H "Authorization: Bearer $TOKEN" "$BASE/api/v1/inventory?limit=3"
-```
-
-Swagger UI is at `$BASE/docs`.
-
-### Serverless caveats
-
-- **Cold starts.** The 120-lot dataset is rebuilt on each cold start. Because the generator is seeded
-  with `random.Random(42)`, every instance produces byte-identical records — IDs stay stable.
-- **Stateless.** There is no shared writable state, so the read-only inventory suits serverless well.
-  Any future write endpoint needs a real database; in-memory mutations would not survive.
-- **Tokens survive redeploys** only while `SECRET_KEY` stays the same. Rotating it invalidates every
-  issued token.
+- **Cold starts.** The dataset is rebuilt on each cold start. Because the generator is seeded, every
+  instance produces identical records, so IDs stay stable.
+- **Stateless.** The inventory is read-only, which suits serverless well. Any future write endpoint
+  would need a real database — in-memory mutations would not survive.
 
 ---
 
-## Changing the dataset
+## Troubleshooting
 
-Both knobs live at the top of the dataset section in [main.py](main.py):
-
-```python
-TOTAL_RECORDS = 120
-RANDOM_SEED = 42
-```
-
-Add a country to the `ORIGINS` dict — with its regions, varieties, farms, altitude band, score band
-and processing methods — and the generator picks it up on the next start.
+| Symptom | Cause and fix |
+| :--- | :--- |
+| Blockbrain cannot fetch the specification | Confirm `https://<host>/openapi.json` returns 200 without credentials. It is public by design. |
+| Every request returns FastAPI's own 404 | A rewrite is mangling the request path — see the warning under Option A. |
+| Agent calls return `401` | Registry Authentication must be `Basic` with the username and password above, not Bearer. |
+| Registry rejects the schema | The document is OpenAPI **3.1.0**. If the registry only parses 3.0.x, set `app.openapi_version = "3.0.3"` in [main.py](main.py) and re-fetch. |
+| `422` on an agent call | A parameter is out of bounds — `limit` must be 1–100, `item_id` ≥ 1, `min_score` 0–100. |
