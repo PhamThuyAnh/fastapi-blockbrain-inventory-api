@@ -437,8 +437,13 @@ app = FastAPI(
         "The dataset is generated deterministically from a fixed seed, so the "
         "same query always returns the same records."
     ),
-    version="1.0.0",
-    contact={"name": "PhamThuyAnh", "url": "https://github.com/PhamThuyAnh"},
+    # 2.0.0: HTTP Basic replaced OAuth2 Bearer, and the list response renamed
+    # `limit` to `page_size` - both breaking changes for earlier clients.
+    version="2.0.0",
+    contact={
+        "name": "PhamThuyAnh",
+        "url": "https://github.com/PhamThuyAnh/fastapi-blockbrain-inventory-api",
+    },
     openapi_tags=[
         {
             "name": "inventory",

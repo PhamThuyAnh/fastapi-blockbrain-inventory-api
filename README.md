@@ -50,8 +50,8 @@ Filled in for the current deployment:
 ## Setup
 
 ```bash
-git clone https://github.com/PhamThuyAnh/fastapi-oauth2-inventory-api.git
-cd fastapi-oauth2-inventory-api
+git clone https://github.com/PhamThuyAnh/fastapi-blockbrain-inventory-api.git
+cd fastapi-blockbrain-inventory-api
 
 python -m venv venv
 
@@ -306,7 +306,7 @@ curl "$BASE/openapi.json"
 ## Project layout
 
 ```text
-fastapi-oauth2-inventory-api/
+fastapi-blockbrain-inventory-api/
 ├── main.py            # App, Basic auth, dataset generator, endpoints
 ├── requirements.txt   # fastapi, uvicorn[standard], pydantic
 ├── .gitignore
